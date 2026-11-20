@@ -3,44 +3,45 @@ import logging
 import os
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram.ext import (
+    Application, CommandHandler, CallbackQueryHandler, ContextTypes
+)
 from bybit_scanner import BybitScanner
 from database import Database
 
 logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format="%(asctime)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+TELEGRAM_TOKEN   = os.environ["TELEGRAM_TOKEN"]
+TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
-db = Database()
+db      = Database()
 scanner = BybitScanner(db)
 
-# ─── KEYBOARDS ───────────────────────────────────────────────────────────────
+# ─── KEYBOARDS ────────────────────────────────────────────────────────────────
 
 def main_keyboard():
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("📊 Watchlist", callback_data="watchlist"),
-            InlineKeyboardButton("📈 Статистика", callback_data="stats"),
+            InlineKeyboardButton("📊 Watchlist",   callback_data="watchlist"),
+            InlineKeyboardButton("📈 Статистика",  callback_data="stats"),
         ],
         [
-            InlineKeyboardButton("⚙️ Настройки", callback_data="settings"),
-            InlineKeyboardButton("🔄 Обновить", callback_data="refresh"),
+            InlineKeyboardButton("⚙️ Настройки",  callback_data="settings"),
+            InlineKeyboardButton("🔄 Обновить",   callback_data="back_main"),
         ],
-        [
-            InlineKeyboardButton("❓ Помощь", callback_data="help"),
-        ]
+        [InlineKeyboardButton("❓ Помощь",         callback_data="help")],
     ])
 
 def watchlist_keyboard(symbols):
     buttons = []
     for s in symbols:
-        pnl = db.get_pnl(s)
-        label = f"{'🟢' if pnl >= 0 else '🔴'} {s} ({pnl:+.1f}%)"
+        pnl   = db.get_pnl(s)
+        emoji = "🟢" if pnl >= 0 else "🔴"
+        label = f"{emoji} {s} ({pnl:+.1f}%)"
         buttons.append([InlineKeyboardButton(label, callback_data=f"coin_{s}")])
     buttons.append([InlineKeyboardButton("🔙 Назад", callback_data="back_main")])
     return InlineKeyboardMarkup(buttons)
@@ -48,68 +49,98 @@ def watchlist_keyboard(symbols):
 def coin_keyboard(symbol):
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🗑 Удалить из watchlist", callback_data=f"remove_{symbol}")],
-        [InlineKeyboardButton("🔙 Назад", callback_data="watchlist")],
+        [InlineKeyboardButton("🔙 Назад",                callback_data="watchlist")],
     ])
 
 def settings_keyboard():
     cfg = db.get_settings()
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"⏱ Мин. таймфрейм: {cfg['min_tf']}ч", callback_data="set_min_tf")],
-        [InlineKeyboardButton(f"⏱ Макс. таймфрейм: {cfg['max_tf']}ч", callback_data="set_max_tf")],
-        [InlineKeyboardButton(f"🚀 Мин. рост: {cfg['min_pct']}%", callback_data="set_min_pct")],
-        [InlineKeyboardButton(f"🎯 Цель шорта: {cfg['target_pct']}%", callback_data="set_target_pct")],
-        [InlineKeyboardButton("🔙 Назад", callback_data="back_main")],
+        [InlineKeyboardButton(f"⏱ Мин. таймфрейм: {int(cfg['min_tf'])}ч",    callback_data="set_min_tf")],
+        [InlineKeyboardButton(f"⏱ Макс. таймфрейм: {int(cfg['max_tf'])}ч",   callback_data="set_max_tf")],
+        [InlineKeyboardButton(f"🚀 Мин. рост: {int(cfg['min_pct'])}%",        callback_data="set_min_pct")],
+        [InlineKeyboardButton(f"🎯 Цель шорта: {int(cfg['target_pct'])}%",    callback_data="set_target_pct")],
+        [InlineKeyboardButton("🔙 Назад",                                       callback_data="back_main")],
     ])
 
-# ─── COMMAND HANDLERS ────────────────────────────────────────────────────────
+# ─── HANDLERS ────────────────────────────────────────────────────────────────
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cfg = db.get_settings()
+    wl  = db.get_watchlist()
     text = (
         "🤖 *Bybit Short Hunter*\n"
         "━━━━━━━━━━━━━━━━━━━━━\n\n"
-        "Я мониторю фьючерсы Bybit и нахожу монеты,\n"
+        "Мониторю фьючерсы Bybit и нахожу монеты,\n"
         "которые резко выросли — кандидаты для *шорта*.\n\n"
         f"📡 Сканирую каждые *5 минут*\n"
-        f"📈 Рост за {cfg['min_tf']}–{cfg['max_tf']}ч: от *{cfg['min_pct']}%*\n"
-        f"🎯 Цель для шорта: *{cfg['target_pct']}%*\n\n"
+        f"📈 Рост за {int(cfg['min_tf'])}–{int(cfg['max_tf'])}ч: от *{int(cfg['min_pct'])}%*\n"
+        f"🎯 Цель для шорта: *{int(cfg['target_pct'])}%*\n"
+        f"👁 В наблюдении: *{len(wl)} монет*\n\n"
         "Выбери действие:"
     )
     await update.message.reply_text(text, parse_mode="Markdown", reply_markup=main_keyboard())
 
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    data = q.data
+async def set_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    args = context.args
+    valid = {"min_tf", "max_tf", "min_pct", "target_pct"}
+    if len(args) != 2 or args[0] not in valid:
+        await update.message.reply_text(
+            "❌ Формат: `/set <param> <value>`\n"
+            f"Параметры: {', '.join(valid)}",
+            parse_mode="Markdown"
+        )
+        return
+    try:
+        db.update_setting(args[0], float(args[1]))
+        await update.message.reply_text(
+            f"✅ *{args[0]}* = `{args[1]}`",
+            parse_mode="Markdown", reply_markup=main_keyboard()
+        )
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка: {e}")
 
-    if data == "back_main" or data == "refresh":
-        cfg = db.get_settings()
-        wl = db.get_watchlist()
+async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q    = update.callback_query
+    data = q.data
+    await q.answer()
+
+    cfg = db.get_settings()
+    wl  = db.get_watchlist()
+
+    # ── Main / refresh ───────────────────────────────────────────────────────
+    if data == "back_main":
         text = (
             "🤖 *Bybit Short Hunter*\n"
             "━━━━━━━━━━━━━━━━━━━━━\n\n"
             f"📡 Сканирую каждые *5 минут*\n"
-            f"📈 Рост за {cfg['min_tf']}–{cfg['max_tf']}ч: от *{cfg['min_pct']}%*\n"
-            f"🎯 Цель для шорта: *{cfg['target_pct']}%*\n"
+            f"📈 Рост за {int(cfg['min_tf'])}–{int(cfg['max_tf'])}ч: от *{int(cfg['min_pct'])}%*\n"
+            f"🎯 Цель для шорта: *{int(cfg['target_pct'])}%*\n"
             f"👁 В наблюдении: *{len(wl)} монет*\n\n"
             "Выбери действие:"
         )
         await q.edit_message_text(text, parse_mode="Markdown", reply_markup=main_keyboard())
 
+    # ── Watchlist ─────────────────────────────────────────────────────────────
     elif data == "watchlist":
-        wl = db.get_watchlist()
         if not wl:
-            text = "👁 *Watchlist пуст*\n\nБот автоматически добавит монеты при обнаружении."
-            await q.edit_message_text(text, parse_mode="Markdown",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="back_main")]]))
+            await q.edit_message_text(
+                "👁 *Watchlist пуст*\n\nБот добавит монеты автоматически при обнаружении.",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="back_main")]]),
+            )
         else:
-            text = "👁 *Watchlist — монеты под наблюдением:*\n\nНажми на монету для подробностей."
-            await q.edit_message_text(text, parse_mode="Markdown", reply_markup=watchlist_keyboard(wl))
+            await q.edit_message_text(
+                "👁 *Watchlist — монеты под наблюдением:*",
+                parse_mode="Markdown",
+                reply_markup=watchlist_keyboard(wl),
+            )
 
+    # ── Coin detail ───────────────────────────────────────────────────────────
     elif data.startswith("coin_"):
         symbol = data[5:]
-        info = db.get_coin_info(symbol)
+        info   = db.get_coin_info(symbol)
         if info:
+            at_target = info["pct_current"] >= cfg["target_pct"]
             text = (
                 f"📌 *{symbol}*\n"
                 "━━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -119,86 +150,80 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"📈 Рост при обнаружении: `+{info['pct_at_detection']:.1f}%`\n"
                 f"📊 Текущий рост: `{info['pct_current']:+.1f}%`\n"
                 f"⏱ Таймфрейм: `{info['timeframe']}`\n\n"
-                f"{'🎯 *Цель достигнута — готов к шорту!*' if info['pct_current'] >= db.get_settings()['target_pct'] else '⏳ Ждём достижения цели...'}"
+                + ("🎯 *Цель достигнута — готов к шорту!*" if at_target else "⏳ Ждём достижения цели...")
             )
             await q.edit_message_text(text, parse_mode="Markdown", reply_markup=coin_keyboard(symbol))
+        else:
+            await q.edit_message_text("❌ Монета не найдена в watchlist.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="watchlist")]]))
 
+    # ── Remove ────────────────────────────────────────────────────────────────
     elif data.startswith("remove_"):
         symbol = data[7:]
         db.remove_from_watchlist(symbol)
-        await q.answer(f"✅ {symbol} удалён из watchlist", show_alert=True)
+        await q.answer(f"✅ {symbol} удалён", show_alert=True)
         wl = db.get_watchlist()
         if not wl:
             await q.edit_message_text("👁 *Watchlist пуст*", parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="back_main")]]))
         else:
-            await q.edit_message_text("👁 *Watchlist:*", parse_mode="Markdown", reply_markup=watchlist_keyboard(wl))
+            await q.edit_message_text("👁 *Watchlist:*", parse_mode="Markdown",
+                reply_markup=watchlist_keyboard(wl))
 
+    # ── Stats ─────────────────────────────────────────────────────────────────
     elif data == "stats":
-        stats = db.get_stats()
+        s = db.get_stats()
         text = (
             "📈 *Статистика бота*\n"
             "━━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"🔍 Всего обнаружено: *{stats['total_found']}*\n"
-            f"👁 Сейчас в watchlist: *{stats['in_watchlist']}*\n"
-            f"🎯 Достигли цели: *{stats['reached_target']}*\n"
-            f"📡 Последнее сканирование:\n`{stats['last_scan']}`\n\n"
-            f"⏱ Работаю с: `{stats['started']}`"
+            f"🔍 Всего обнаружено: *{s['total_found']}*\n"
+            f"👁 Сейчас в watchlist: *{s['in_watchlist']}*\n"
+            f"🎯 Достигли цели: *{s['reached_target']}*\n"
+            f"📡 Последнее сканирование:\n`{s['last_scan']}`\n\n"
+            f"⏱ Работаю с: `{s['started']}`"
         )
         await q.edit_message_text(text, parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="back_main")]]))
 
+    # ── Settings ──────────────────────────────────────────────────────────────
     elif data == "settings":
-        text = "⚙️ *Настройки сканера*\n\nНажми на параметр чтобы изменить:"
-        await q.edit_message_text(text, parse_mode="Markdown", reply_markup=settings_keyboard())
+        await q.edit_message_text(
+            "⚙️ *Настройки сканера*\n\nНажми на параметр, затем используй команду для изменения:",
+            parse_mode="Markdown", reply_markup=settings_keyboard()
+        )
 
     elif data.startswith("set_"):
-        param = data[4:]
-        prompts = {
-            "min_tf": "Введи минимальный таймфрейм в часах (1–24):\n/set min_tf <число>",
-            "max_tf": "Введи максимальный таймфрейм в часах (1–36):\n/set max_tf <число>",
-            "min_pct": "Введи минимальный % роста для алерта (10–100):\n/set min_pct <число>",
-            "target_pct": "Введи целевой % роста для шорта (50–200):\n/set target_pct <число>",
+        hints = {
+            "set_min_tf":     "Введи: `/set min_tf <часы>`\nПример: `/set min_tf 1`",
+            "set_max_tf":     "Введи: `/set max_tf <часы>`\nПример: `/set max_tf 36`",
+            "set_min_pct":    "Введи: `/set min_pct <процент>`\nПример: `/set min_pct 50`",
+            "set_target_pct": "Введи: `/set target_pct <процент>`\nПример: `/set target_pct 80`",
         }
-        await q.answer(prompts.get(param, ""), show_alert=True)
+        await q.answer(hints.get(data, ""), show_alert=True)
 
+    # ── Help ──────────────────────────────────────────────────────────────────
     elif data == "help":
         text = (
             "❓ *Как работает бот*\n"
             "━━━━━━━━━━━━━━━━━━━━━\n\n"
             "1️⃣ Каждые 5 минут сканирую ВСЕ USDT-фьючерсы Bybit\n\n"
-            "2️⃣ Нахожу монеты, которые выросли на *50%+* за 1–36 часов\n\n"
+            "2️⃣ Нахожу монеты с ростом *50%+* за 1–36 часов\n\n"
             "3️⃣ Добавляю в *Watchlist* и слежу дальше\n\n"
-            "4️⃣ Когда монета достигает цели *80–90%* — шлю алерт 🎯\n\n"
+            "4️⃣ Когда монета достигает *80%+* — алерт 🎯\n\n"
             "5️⃣ Это сигнал для входа в *ШОРТ* 📉\n\n"
             "*Команды:*\n"
-            "/start — главное меню\n"
-            "/set min\\_tf 1 — мин. таймфрейм (ч)\n"
-            "/set max\\_tf 36 — макс. таймфрейм (ч)\n"
-            "/set min\\_pct 50 — мин. % роста\n"
-            "/set target\\_pct 80 — цель шорта (%)\n"
+            "`/start` — главное меню\n"
+            "`/set min_tf 1` — мин. таймфрейм (ч)\n"
+            "`/set max_tf 36` — макс. таймфрейм (ч)\n"
+            "`/set min_pct 50` — мин. % роста\n"
+            "`/set target_pct 80` — цель шорта (%)\n"
         )
         await q.edit_message_text(text, parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="back_main")]]))
 
-async def set_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    args = context.args
-    if len(args) != 2:
-        await update.message.reply_text("❌ Формат: /set <param> <value>\nПример: /set min_pct 50")
-        return
-    param, val = args[0], args[1]
-    try:
-        val = float(val)
-        db.update_setting(param, val)
-        await update.message.reply_text(f"✅ Параметр *{param}* обновлён: `{val}`",
-            parse_mode="Markdown", reply_markup=main_keyboard())
-    except Exception as e:
-        await update.message.reply_text(f"❌ Ошибка: {e}")
+# ─── ALERT SENDER ─────────────────────────────────────────────────────────────
 
-# ─── ALERT SENDER ────────────────────────────────────────────────────────────
-
-async def send_alert(app, alert_type: str, data: dict):
-    """Send beautiful alert to Telegram"""
+async def send_alert(app: Application, alert_type: str, data: dict):
     if alert_type == "new_pump":
         text = (
             f"🚨 *НАСОС ОБНАРУЖЕН!*\n"
@@ -206,14 +231,13 @@ async def send_alert(app, alert_type: str, data: dict):
             f"🪙 *{data['symbol']}*\n\n"
             f"📈 Рост: *+{data['pct_change']:.1f}%*\n"
             f"⏱ За: *{data['timeframe']}*\n"
-            f"💰 Текущая цена: `${data['price']:.6f}`\n"
+            f"💰 Цена: `${data['price']:.6f}`\n"
             f"💵 Объём 24ч: `${data['volume_24h']:,.0f}`\n\n"
-            f"👁 Добавлена в *Watchlist*\n"
-            f"⏳ Слежу до достижения цели..."
+            f"👁 Добавлена в *Watchlist* — слежу за ростом..."
         )
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton(f"📊 Смотреть {data['symbol']}", callback_data=f"coin_{data['symbol']}")],
-            [InlineKeyboardButton("👁 Весь Watchlist", callback_data="watchlist")],
+            [InlineKeyboardButton(f"📊 {data['symbol']}", callback_data=f"coin_{data['symbol']}")],
+            [InlineKeyboardButton("👁 Watchlist",          callback_data="watchlist")],
         ])
 
     elif alert_type == "target_reached":
@@ -222,102 +246,92 @@ async def send_alert(app, alert_type: str, data: dict):
             f"━━━━━━━━━━━━━━━━━━━━━\n\n"
             f"🪙 *{data['symbol']}*\n\n"
             f"📈 Итоговый рост: *+{data['pct_total']:.1f}%*\n"
-            f"💰 Цена входа (шорт): `${data['price']:.6f}`\n"
-            f"📉 Рекомендую: *ОТКРЫТЬ ШОРТ*\n\n"
-            f"⚠️ _Не является финансовым советом.\nТоргуй на свой страх и риск._"
+            f"💰 Цена входа (шорт): `${data['price']:.6f}`\n\n"
+            f"📉 *ОТКРЫВАЙ ШОРТ!*\n\n"
+            f"⚠️ _Не является финансовым советом_"
         )
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton(f"📊 {data['symbol']} детали", callback_data=f"coin_{data['symbol']}")],
-            [InlineKeyboardButton("🗑 Убрать из watchlist", callback_data=f"remove_{data['symbol']}")],
+            [InlineKeyboardButton("🗑 Убрать из watchlist",       callback_data=f"remove_{data['symbol']}")],
         ])
 
     elif alert_type == "update":
         text = (
-            f"📡 *Обновление по {data['symbol']}*\n"
+            f"📡 *Близко к цели: {data['symbol']}*\n"
             f"━━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"📈 Рост с обнаружения: *+{data['pct_total']:.1f}%*\n"
+            f"📈 Рост: *+{data['pct_total']:.1f}%*\n"
             f"💰 Цена: `${data['price']:.6f}`\n"
-            f"🎯 До цели: *{data['to_target']:.1f}%*"
+            f"🎯 До цели осталось: *{data['to_target']:.1f}%*"
         )
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton(f"📊 {data['symbol']}", callback_data=f"coin_{data['symbol']}")],
         ])
+    else:
+        return
 
     try:
         await app.bot.send_message(
             chat_id=TELEGRAM_CHAT_ID,
             text=text,
             parse_mode="Markdown",
-            reply_markup=kb
+            reply_markup=kb,
         )
     except Exception as e:
-        logger.error(f"Failed to send alert: {e}")
+        logger.error(f"Alert send error: {e}")
 
 # ─── SCANNER LOOP ─────────────────────────────────────────────────────────────
 
-async def scanner_loop(app):
-    """Main scanning loop - runs every 5 minutes"""
-    await asyncio.sleep(5)  # small startup delay
-    logger.info("🔍 Scanner started")
-
-    # Send startup message
+async def scanner_loop(app: Application):
+    await asyncio.sleep(5)
+    logger.info("Scanner started")
     try:
         await app.bot.send_message(
             chat_id=TELEGRAM_CHAT_ID,
             text=(
                 "✅ *Bybit Short Hunter запущен!*\n\n"
                 "🔍 Начинаю мониторинг фьючерсов...\n"
-                "📡 Сканирование каждые 5 минут"
+                "📡 Сканирование каждые 5 минут\n\n"
+                "Первый скан займёт ~2 минуты."
             ),
             parse_mode="Markdown",
-            reply_markup=main_keyboard()
+            reply_markup=main_keyboard(),
         )
     except Exception as e:
-        logger.error(f"Startup message failed: {e}")
+        logger.error(f"Startup msg error: {e}")
 
     while True:
         try:
             logger.info("Running scan...")
             results = await scanner.scan()
             db.update_last_scan()
-
             for r in results:
-                if r['type'] == 'new_pump':
-                    await send_alert(app, 'new_pump', r)
-                elif r['type'] == 'target_reached':
-                    await send_alert(app, 'target_reached', r)
-                elif r['type'] == 'update':
-                    await send_alert(app, 'update', r)
-
+                await send_alert(app, r["type"], r)
+                await asyncio.sleep(0.5)   # small gap between alerts
         except Exception as e:
-            logger.error(f"Scanner error: {e}")
-
-        await asyncio.sleep(300)  # 5 minutes
+            logger.error(f"Scanner loop error: {e}")
+        await asyncio.sleep(300)   # 5 minutes
 
 # ─── MAIN ────────────────────────────────────────────────────────────────────
 
 def main():
-    if not TELEGRAM_TOKEN:
-        raise ValueError("TELEGRAM_TOKEN env var not set")
-    if not TELEGRAM_CHAT_ID:
-        raise ValueError("TELEGRAM_CHAT_ID env var not set")
-
-    app = Application.builder().token(TELEGRAM_TOKEN).build()
-
+    app = (
+        Application.builder()
+        .token(TELEGRAM_TOKEN)
+        .build()
+    )
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("set", set_command))
-    app.add_handler(CallbackQueryHandler(button_handler))
+    app.add_handler(CommandHandler("set",   set_cmd))
+    app.add_handler(CallbackQueryHandler(button))
 
-    # Start scanner in background
-    loop = asyncio.get_event_loop()
+    # Schedule scanner as a job
+    app.job_queue  # ensure job_queue is initialized
 
-    async def run():
-        async with app:
-            await app.start()
-            await app.updater.start_polling(drop_pending_updates=True)
-            await scanner_loop(app)
+    async def post_init(application: Application):
+        asyncio.create_task(scanner_loop(application))
 
-    loop.run_until_complete(run())
+    app.post_init = post_init
+
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
